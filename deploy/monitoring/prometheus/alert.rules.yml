@@ -1,0 +1,184 @@
+# deploy/monitoring/prometheus/alert.rules.yml
+#
+# 告警规则。每条都对应一个「已经发生、需要人处理」的故障，不做「可能会变差」的预测型告警。
+#
+# 阈值改法：这里的数字都是生产起点值，改之前先看 Grafana 上真实曲线的分布，
+# 否则要么天天误报（大家开始忽略告警），要么真出事不响。
+# 与代码里配置项对应关系的三处：
+#   · IndexFragmented 的 64 ←→ .env 的 INDEX_MAX_SEALED_SEGMENTS
+#   · QueryP99High 的 5s ←→ .env 的 LATENCY_P99_BASELINE_MS × INDEX_P99_DEGRADE_RATIO
+#   · OnlineRecallLow 的 0.7 ←→ eval/config.py 的 online_relevance_min
+
+groups:
+  - name: kb-availability
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "抓取目标 {{ $labels.job }} ({{ $labels.instance }}) 掉线"
+          description: "Prometheus 连续 2 分钟抓不到该目标。可能是服务崩了、容器重启中，或网络不通。"
+
+  - name: kb-query
+    rules:
+      - alert: QueryP99High
+        expr: histogram_quantile(0.99, sum by (le) (rate(kb_query_latency_seconds_bucket[5m]))) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "查询 p99 延迟 {{ $value | printf \"%.2f\" }}s 超过 5s"
+          description: >-
+            整条查询链路（含 LLM 生成）的 p99 持续偏高。先在 Grafana 的「单路检索延迟」面板看
+            是 dense/hyde/web 哪一路慢；三路都正常就是 LLM 生成慢，去查大模型服务。
+
+      - alert: RetrievalSlow
+        expr: histogram_quantile(0.95, sum by (le, path) (rate(kb_retrieval_latency_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "检索路 {{ $labels.path }} 的 p95 延迟 {{ $value | printf \"%.2f\" }}s 超过 1s"
+          description: >-
+            单路检索持续偏慢，按路分开报是为了直接指出瓶颈：
+            dense 慢 → 查 Milvus（segment 碎片化/ef 太大/内存不够）；
+            hyde 慢 → 大概率是生成假设文档的那次 LLM 调用；
+            web 慢 → 外部搜索 MCP 服务的问题。
+
+      - alert: QueryErrorRateHigh
+        expr: |
+          sum(rate(kb_query_total{status="failed"}[5m]))
+            /
+          sum(rate(kb_query_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "查询失败率 {{ $value | humanizePercentage }} 超过 10%"
+          description: "status=failed 表示整条链路没产出答案（没走到答案节点或答案为空）。"
+
+      - alert: SlowQueryBurst
+        expr: increase(kb_slow_query_total[15m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "15 分钟内新增 {{ $value | printf \"%.0f\" }} 条慢查询（reason={{ $labels.reason }}）"
+          description: >-
+            慢查询明细已写入 Mongo 的 query_log 集合，按 slow=true 过滤即可看到每路的耗时与参数。
+            reason=total 是整体慢，reason=path 是某一路慢。
+
+      - alert: NodeErrorBurst
+        expr: sum by (flow, node) (increase(kb_node_errors_total[10m])) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.flow }} 链路的 {{ $labels.node }} 节点 10 分钟内失败 {{ $value | printf \"%.0f\" }} 次"
+          description: "节点级错误计数。注意自己吞掉异常的节点（如三路检索）不会进这个指标，要看 per_path 里的 error 字段。"
+
+  - name: kb-recall
+    rules:
+      - alert: RecallDrop
+        expr: |
+          max by (scenario, k) (kb_eval_recall{k="10"})
+            <
+          (max by (scenario, k) (kb_eval_recall{k="10"} offset 1d) - 0.02)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "场景 {{ $labels.scenario }} 的 recall@10 比一天前跌了超过 2%"
+          description: >-
+            数据来自最近一次评测结果文件（eval/results/*.json），指标值 = 最新那份的 recall@10。
+            这里用 max by (scenario,k) 把 mode 标签聚合掉，否则召回层与完整链路两种模式的序列
+            标签不同，offset 对比会匹配不上而静默不告警。
+            发布门禁（eval/gate.py）拦的是「上线前」，这条告警补的是「上线后语料/索引变化导致的召回衰减」。
+            只有离线评测出 k=10（recall@k 里的 k 是取回条数，线上抽样只评前 3 条），
+            所以这条天然是离线口径；线上真实查询的相关率由下面的 OnlineRecallLow 看。
+
+      # 图中「抽样召回率」这一项：对真实用户查询做 LLM 裁判得到的相关率。
+      # 和离线评测集的差别是——离线用的是反向生成的理想问题，这里用的是线上真问题，
+      # 所以它跌了往往意味着知识库缺内容或用户问法变了，而不一定是索引坏了。
+      - alert: OnlineRecallLow
+        expr: max by (scenario) (kb_eval_recall{mode="online", k="3", scenario="online"}) < 0.7
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "线上抽样相关率 {{ $value | humanizePercentage }}，低于 70%"
+          description: >-
+            含义是「前 3 条检索结果里至少有一条相关」的查询占比，由
+            `python -m eval.online_eval` 或每 6 小时一轮的巡检调度器产出。
+            只看聚合口径（scenario=online）：按意图拆分的序列每轮只有几条样本，抖动大到没有告警价值。
+            先确认 judge_rate 不低（裁判模型没抽风），再看是不是空检索变多——
+            空检索说明知识库压根没有相关资料，重建索引解决不了，得补语料。
+            阈值与 eval/config.py 的 online_relevance_min 保持一致。
+
+  - name: kb-index
+    rules:
+      - alert: RebuildFailed
+        expr: max by (logical, version) (kb_rebuild_status{status="failed"}) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "索引重建失败：{{ $labels.logical }} v{{ $labels.version }}"
+          description: >-
+            蓝绿重建没走完，线上仍指向旧的 active 版本（用户无感知），但新集合是残缺的。
+            处理：看导入服务日志定位失败原因，用
+            `python -m processor.index_manager.rebuild --mark-failed --version <N> --yes`
+            标记后删掉新集合重来。
+
+      - alert: IndexFragmented
+        expr: kb_index_sealed_segments > 64
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "集合 {{ $labels.collection }} 的 sealed segment 数 {{ $value | printf \"%.0f\" }} 超过 64"
+          description: >-
+            段太多意味着查询要扫的段变多、延迟上升，通常是删改频繁导致 compaction 跟不上。
+            处理：跑一次蓝绿重建把数据压实（move_vectors 模式，不花模型算力）。
+            阈值与 .env 的 INDEX_MAX_SEALED_SEGMENTS 保持一致。
+
+  - name: kb-resource
+    rules:
+      - alert: MilvusMemHigh
+        expr: process_resident_memory_bytes{job="milvus"} > 6.5e9
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Milvus 常驻内存 {{ $value | humanize1024 }}B 超过阈值"
+          description: >-
+            内存持续走高会被 OOM Killer 干掉，届时检索整体不可用。
+            阈值按宿主机内存的 80% 改：8GB 机器写 6.5e9，16GB 写 1.3e10。
+            降内存手段：调小 HNSW 的 M、给稠密索引加量化、或把冷数据搬到别的集合。
+
+      - alert: AppMemHigh
+        expr: process_resident_memory_bytes{job=~"query-api|import-api"} > 6.5e9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} 常驻内存 {{ $value | humanize1024 }}B 超过阈值"
+          description: >-
+            注意这两个服务会常驻 BGE-M3 与重排模型，几个 GB 是正常的；
+            这条告警抓的是「持续往上爬」的泄漏形态，触发时先看曲线斜率而不是绝对值。
+
+  - name: kb-import
+    rules:
+      - alert: ImportErrorRate
+        expr: |
+          sum(rate(kb_import_tasks_total{status="failed"}[30m]))
+            /
+          sum(rate(kb_import_tasks_total[30m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "导入失败率 {{ $value | humanizePercentage }} 超过 20%"
+          description: "30 分钟窗口。导入是异步后台任务，失败不会反馈给用户，只能靠这条告警发现。"

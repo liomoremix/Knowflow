@@ -1,0 +1,91 @@
+# deploy/monitoring/docker-compose.monitoring.yml
+#
+# 监控栈：Prometheus（拉指标 + 跑告警规则）→ Alertmanager（通知）→ Grafana（看板）
+#
+# 用法：根目录 docker-compose.yml 已经 include 了本文件，直接 `docker compose up -d` 即可。
+# 回退：把根 compose 里的那一行 include 删掉，监控整体下线，业务服务不受任何影响。
+#
+# 注意：本文件里的相对路径以「本文件所在目录」为基准解析（compose include 的规则），
+# 所以 ./prometheus/prometheus.yml 指的是 deploy/monitoring/prometheus/prometheus.yml。
+# 三个服务都不声明 networks，会加入根 compose 的默认网络，因此能用服务名直接访问
+# query-api / import-api / standalone（Milvus）。
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: kb-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 保留 15 天：够看趋势和做「与昨天对比」的召回率告警，又不会把磁盘吃满
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - alertmanager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: kb-alertmanager
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "9093:9093"
+    environment:
+      # 告警推送地址：钉钉/飞书机器人一般需要一个转发网关（它们要求的签名与 body 格式
+      # 和 Alertmanager 的 webhook 不一样）。在根目录 .env 里设 ALERT_WEBHOOK_URL 覆盖。
+      # 默认值故意指向一个没人监听的端口：推不出去会在 Alertmanager 日志里报错，
+      # 而不是把告警悄悄丢掉。
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-http://host.docker.internal:5001/alerts}
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: kb-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      # 首次登录用 admin/admin，进 Grafana 后请立刻改密码
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # 免登录看板（演示/内网用）：生产环境请设为 false
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANONYMOUS:-true}
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:

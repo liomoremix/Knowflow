@@ -1,0 +1,14 @@
+# GPU 叠加文件：docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+# 需宿主机装好 NVIDIA 驱动 + nvidia-container-toolkit，且 .env 设 BGE_DEVICE=cuda:0 / BGE_FP16=True
+
+x-gpu: &gpu
+  gpus: all
+  environment:
+    BGE_DEVICE: cuda:0
+    BGE_FP16: "True"
+
+services:
+  import-api:
+    <<: *gpu
+  query-api:
+    <<: *gpu

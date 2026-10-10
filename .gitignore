@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual env
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Test / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp data
+temp_data/
+
+# 评测运行产物：指标结果与人工抽查待审文件都可重跑生成，不入库
+# （datasets/ 里的评测集要入库——那是标注资产，重建索引后还得靠它做门禁）
+eval/results/
+eval/review/
+
+# Qoder CLI session artifacts (conversation transcripts, not project code)
+.qoder-credits/
+
+# NOTE: .env is intentionally tracked (private repo, per owner request).

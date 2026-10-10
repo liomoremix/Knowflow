@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库导入</title>
+<style>
+  :root{
+    --bg:#f4f6f9; --surface:#ffffff; --border:#e3e8ef;
+    --text:#1f2937; --text-2:#6b7280; --text-3:#9aa3af;
+    --accent:#2b9bf4; --accent-deep:#1e7fd6;
+    --ok:#16a34a; --warn:#d97706; --err:#dc2626;
+    --radius:10px;
+    --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:15px; line-height:1.65;
+    display:flex; flex-direction:column;
+  }
+  button{font:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+  /* 顶栏 */
+  .topbar{
+    flex:0 0 auto; display:flex; align-items:center; justify-content:space-between;
+    gap:16px; padding:12px 20px; background:var(--surface);
+    border-bottom:1px solid var(--border);
+  }
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{width:38px;height:38px;border-radius:10px;background:var(--accent)}
+  .brand h1{font-size:16px;font-weight:600;letter-spacing:.2px}
+  .brand p{font-size:12px;color:var(--text-2)}
+  .pill{
+    font-size:12px;color:var(--text-2);background:var(--bg);
+    border:1px solid var(--border);border-radius:999px;padding:5px 12px;white-space:nowrap;
+  }
+  .pill.on{color:var(--ok);border-color:#bbe5c8;background:#f0faf3}
+
+  /* 主体 */
+  main{flex:1 1 auto;overflow-y:auto;padding:24px 20px 40px}
+  .wrap{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+
+  /* 上传区 */
+  .dropzone{
+    background:var(--surface);border:1.5px dashed #cbd5e1;border-radius:14px;
+    padding:38px 24px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;
+  }
+  .dropzone:hover{border-color:var(--accent);background:#fbfdff}
+  .dropzone.drag{border-color:var(--accent);background:#f2f9ff}
+  .dz-icon{
+    width:52px;height:52px;margin:0 auto 14px;border-radius:12px;background:#eef4fb;
+    display:flex;align-items:center;justify-content:center;color:var(--accent);
+  }
+  .dz-icon svg{width:26px;height:26px}
+  .dropzone h2{font-size:16px;font-weight:600;margin-bottom:6px}
+  .dropzone p{font-size:13px;color:var(--text-2)}
+  .dropzone .browse{color:var(--accent);font-weight:500}
+  .dz-hint{margin-top:10px;font-size:12px;color:var(--text-3)}
+
+  /* 总上传进度条 */
+  .upload-bar{display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}
+  .upload-bar.show{display:block}
+  .upload-bar .ub-head{display:flex;justify-content:space-between;font-size:13px;color:var(--text-2);margin-bottom:8px}
+  .track{height:8px;background:#eef1f5;border-radius:999px;overflow:hidden}
+  .track > i{display:block;height:100%;width:0;background:var(--accent);border-radius:999px;transition:width .2s}
+
+  /* 任务列表 */
+  .list-head{display:flex;align-items:baseline;justify-content:space-between;margin-top:4px}
+  .list-head h3{font-size:14px;font-weight:600;color:var(--text-2)}
+  .list-head span{font-size:12px;color:var(--text-3)}
+  .cards{display:flex;flex-direction:column;gap:12px}
+  .empty{font-size:13px;color:var(--text-3);text-align:center;padding:26px 0}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+  .card-top{display:flex;align-items:center;gap:12px;padding:14px 16px}
+  .file-ic{flex:0 0 auto;width:34px;height:34px;border-radius:8px;background:#eef1f5;color:var(--text-2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600}
+  .file-ic.pdf{background:#fdecec;color:#c0392b}
+  .file-ic.md{background:#eaf2fd;color:#2b6cb0}
+  .card-meta{flex:1 1 auto;min-width:0}
+  .fname{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .fsub{font-size:12px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .badge{flex:0 0 auto;font-size:12px;font-weight:500;border-radius:999px;padding:4px 12px;border:1px solid transparent;white-space:nowrap}
+  .badge.uploading{color:var(--warn);border-color:#f6e0b5;background:#fffaf0}
+  .badge.processing{color:var(--accent-deep);border-color:#bfe0fb;background:#f1f8ff}
+  .badge.completed{color:var(--ok);border-color:#bbe5c8;background:#f0faf3}
+  .badge.failed{color:var(--err);border-color:#f3c7c7;background:#fdf2f2}
+
+  .spin{display:inline-block;width:11px;height:11px;border:2px solid #bfe0fb;border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px;margin-right:5px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  /* 日志折叠面板 */
+  details.log{border-top:1px solid var(--border);background:#fafbfc}
+  details.log summary{cursor:pointer;list-style:none;padding:9px 16px;font-size:12.5px;color:var(--text-2);display:flex;align-items:center;gap:6px;user-select:none}
+  details.log summary::-webkit-details-marker{display:none}
+  details.log summary::before{content:"▸";transition:transform .15s;display:inline-block}
+  details.log[open] summary::before{transform:rotate(90deg)}
+  details.log .log-body{padding:2px 16px 12px}
+  details.log ul{list-style:none;display:flex;flex-direction:column;gap:3px}
+  details.log li{font-size:12.5px;color:var(--text-2)}
+  details.log li.run::before{content:"● ";color:var(--accent)}
+  details.log li.done::before{content:"✓ ";color:var(--ok)}
+  .err-text{color:var(--err);font-size:12.5px;margin-top:6px;word-break:break-word}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true"></div>
+    <div>
+      <h1>知识库导入</h1>
+      <p>上传 PDF / Markdown，自动完成切片、主体识别与向量入库</p>
+    </div>
+  </div>
+  <span class="pill" id="apiPill">API: 未连接</span>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="上传文件">
+      <div class="dz-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+      </div>
+      <h2>拖拽文件到此处，或 <span class="browse">点击选择</span></h2>
+      <p>支持一次选择多个文件，上传后自动进入知识库导入流程</p>
+      <div class="dz-hint">仅接受 .pdf / .md 格式</div>
+      <input type="file" id="fileInput" accept=".pdf,.md" multiple hidden>
+    </div>
+
+    <div class="upload-bar" id="uploadBar">
+      <div class="ub-head"><span id="ubLabel">正在上传…</span><span id="ubPct">0%</span></div>
+      <div class="track"><i id="ubFill"></i></div>
+    </div>
+
+    <div class="list-head">
+      <h3>导入任务</h3>
+      <span id="taskCount"></span>
+    </div>
+    <div class="cards" id="cards">
+      <div class="empty" id="empty">暂无任务，上传文件后将在此显示处理进度</div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var dropzone = document.getElementById("dropzone");
+  var fileInput = document.getElementById("fileInput");
+  var uploadBar = document.getElementById("uploadBar");
+  var ubLabel = document.getElementById("ubLabel");
+  var ubPct = document.getElementById("ubPct");
+  var ubFill = document.getElementById("ubFill");
+  var cards = document.getElementById("cards");
+  var empty = document.getElementById("empty");
+  var taskCount = document.getElementById("taskCount");
+  var apiPill = document.getElementById("apiPill");
+
+  var ACCEPT = [".pdf", ".md"];
+  var POLL_MS = 2000;
+  var totalTasks = 0;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function extOf(name) {
+    var i = String(name).lastIndexOf(".");
+    return i >= 0 ? String(name).slice(i).toLowerCase() : "";
+  }
+
+  function allowed(name) {
+    return ACCEPT.indexOf(extOf(name)) >= 0;
+  }
+
+  function fmtSize(bytes) {
+    if (bytes == null) return "";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  }
+
+  // 创建一个任务卡片，返回其内部引用
+  function addCard(file) {
+    if (empty && empty.parentNode) empty.parentNode.removeChild(empty);
+    var ext = extOf(file.name).replace(".", "");
+    var wrap = document.createElement("div");
+    wrap.className = "card";
+    wrap.innerHTML =
+      '<div class="card-top">' +
+        '<div class="file-ic ' + esc(ext) + '">' + esc(ext ? ext.toUpperCase() : "FILE") + '</div>' +
+        '<div class="card-meta">' +
+          '<div class="fname">' + esc(file.name) + '</div>' +
+          '<div class="fsub">' + esc(fmtSize(file.size)) + '</div>' +
+        '</div>' +
+        '<span class="badge uploading">上传中</span>' +
+      '</div>' +
+      '<details class="log"><summary>日志（点击展开）</summary><div class="log-body"><ul></ul></div></details>';
+    cards.appendChild(wrap);
+    totalTasks += 1;
+    taskCount.textContent = "共 " + totalTasks + " 个";
+    return {
+      root: wrap,
+      badge: wrap.querySelector(".badge"),
+      logList: wrap.querySelector(".log ul"),
+      logBody: wrap.querySelector(".log-body"),
+      logBox: wrap.querySelector(".log"),
+      timer: null
+    };
+  }
+
+  function setBadge(card, kind, text) {
+    card.badge.className = "badge " + kind;
+    card.badge.innerHTML = (kind === "processing" || kind === "uploading")
+      ? '<span class="spin"></span>' + esc(text)
+      : esc(text);
+  }
+
+  function renderLog(card, doneList, runningList) {
+    var html = "";
+    (runningList || []).forEach(function (n) { html += '<li class="run">' + esc(n) + " 正在进行...</li>"; });
+    (doneList || []).forEach(function (n) { html += '<li class="done">' + esc(n) + " 已完成</li>"; });
+    card.logList.innerHTML = html;
+  }
+
+  function showError(card, msg) {
+    var d = card.root.querySelector(".err-text");
+    if (!d) { d = document.createElement("div"); d.className = "err-text"; card.logBody.appendChild(d); }
+    d.textContent = "错误: " + msg;
+    card.logBox.open = true;
+  }
+
+  // 轮询单个任务状态，进入 completed/failed 即停止
+  function pollTask(card, taskId) {
+    card.timer = setInterval(function () {
+      fetch("/status/" + encodeURIComponent(taskId))
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          var status = res.status;
+          renderLog(card, res.done_list, res.running_list);
+          if (status === "completed") {
+            setBadge(card, "completed", "已完成");
+            clearInterval(card.timer); card.timer = null;
+          } else if (status === "failed") {
+            setBadge(card, "failed", "失败");
+            clearInterval(card.timer); card.timer = null;
+          } else {
+            setBadge(card, "processing", "处理中");
+          }
+        })
+        .catch(function (err) {
+          // 单次轮询失败不终止，等待下次；网络彻底断开时提示
+          showError(card, err.message || "状态查询失败");
+        });
+    }, POLL_MS);
+  }
+
+  function uploadFiles(fileList) {
+    var files = Array.prototype.filter.call(fileList, function (f) {
+      if (!allowed(f.name)) { alert("已跳过不支持的文件: " + f.name + "（仅接受 .pdf / .md）"); return false; }
+      return true;
+    });
+    if (!files.length) return;
+
+    // 为每个文件先建卡片（状态：上传中）
+    var fileCards = files.map(function (f) { return addCard(f); });
+
+    // FormData 字段名重复为 files，匹配后端 files: List[UploadFile] = File(...)
+    var fd = new FormData();
+    files.forEach(function (f) { fd.append("files", f, f.name); });
+
+    uploadBar.classList.add("show");
+    ubFill.style.width = "0%";
+    ubPct.textContent = "0%";
+    ubLabel.textContent = "正在上传 " + files.length + " 个文件…";
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "/upload");
+
+    xhr.upload.onprogress = function (e) {
+      if (e.lengthComputable) {
+        var pct = Math.round((e.loaded / e.total) * 100);
+        ubFill.style.width = pct + "%";
+        ubPct.textContent = pct + "%";
+      }
+    };
+
+    xhr.upload.onload = function () {
+      ubFill.style.width = "100%";
+      ubPct.textContent = "100%";
+      ubLabel.textContent = "上传完成，服务器处理中…";
+    };
+
+    xhr.onload = function () {
+      setTimeout(function () { uploadBar.classList.remove("show"); }, 800);
+      var res;
+      try { res = JSON.parse(xhr.responseText); } catch (e) { res = null; }
+
+      if (xhr.status >= 200 && xhr.status < 300 && res && Array.isArray(res.task_ids)) {
+        var ids = res.task_ids;
+        fileCards.forEach(function (card, i) {
+          if (i < ids.length) {
+            setBadge(card, "processing", "处理中");
+            pollTask(card, ids[i]);
+          } else {
+            // 后端返回的 task_id 数量少于文件数（异常兜底）
+            setBadge(card, "failed", "失败");
+            showError(card, "未获取到该文件的任务ID");
+          }
+        });
+      } else {
+        fileCards.forEach(function (card) {
+          setBadge(card, "failed", "失败");
+          showError(card, (res && res.message) || ("上传失败 (HTTP " + xhr.status + ")"));
+        });
+      }
+    };
+
+    xhr.onerror = function () {
+      uploadBar.classList.remove("show");
+      fileCards.forEach(function (card) {
+        setBadge(card, "failed", "失败");
+        showError(card, "网络错误，上传未完成");
+      });
+    };
+
+    xhr.send(fd);
+  }
+
+  // 点击 / 键盘 选择文件
+  dropzone.addEventListener("click", function () { fileInput.click(); });
+  dropzone.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener("change", function () {
+    uploadFiles(fileInput.files);
+    fileInput.value = "";  // 允许重复选择同一文件
+  });
+
+  // 拖拽
+  ["dragenter", "dragover"].forEach(function (ev) {
+    dropzone.addEventListener(ev, function (e) { e.preventDefault(); e.stopPropagation(); dropzone.classList.add("drag"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    dropzone.addEventListener(ev, function (e) { e.preventDefault(); e.stopPropagation(); dropzone.classList.remove("drag"); });
+  });
+  dropzone.addEventListener("drop", function (e) {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+      uploadFiles(e.dataTransfer.files);
+    }
+  });
+  // 阻止浏览器默认打开拖入的文件
+  window.addEventListener("dragover", function (e) { e.preventDefault(); });
+  window.addEventListener("drop", function (e) { e.preventDefault(); });
+
+  function checkHealth() {
+    fetch("/health")
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.ok) { apiPill.textContent = "API: 已连接"; apiPill.classList.add("on"); }
+      })
+      .catch(function () { apiPill.textContent = "API: 未连接"; apiPill.classList.remove("on"); });
+  }
+
+  checkHealth();
+})();
+</script>
+</body>
+</html>

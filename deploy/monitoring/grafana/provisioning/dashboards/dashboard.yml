@@ -1,0 +1,19 @@
+# deploy/monitoring/grafana/provisioning/dashboards/dashboard.yml
+#
+# 从容器内的 /var/lib/grafana/dashboards 自动加载看板 JSON。
+# allowUiUpdates=true：可以在 UI 上临时改着看，但容器重建后会回到文件里的版本，
+# 想固化改动就得把 JSON 导回仓库。
+
+apiVersion: 1
+
+providers:
+  - name: kb-dashboards
+    orgId: 1
+    folder: 知识库问答系统
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

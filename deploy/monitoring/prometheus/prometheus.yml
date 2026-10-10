@@ -1,0 +1,57 @@
+# deploy/monitoring/prometheus/prometheus.yml
+#
+# 抓取四个目标：两个业务服务（自己埋的 kb_* 指标 + instrumentator 的 http_* 指标）、
+# Milvus 自带的指标端点、以及 Prometheus 自己（用来算告警规则的评估耗时）。
+#
+# 服务名之所以能直接写 query-api / import-api / standalone：本文件被根 compose include，
+# 监控容器和业务容器在同一个网络里。
+
+global:
+  scrape_interval: 15s
+  # 默认 10s。业务服务的 /metrics 里有几个「抓取时现算」的运维指标（要问 Milvus 和 Mongo），
+  # 这两个依赖卡住时一次抓取可能超过 10s，target 会被判 down——监控自己变成告警源。
+  # 放宽到接近抓取间隔，同时应用侧对现算结果做了 30s 缓存（utils/metrics_utils.py）
+  scrape_timeout: 14s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: zhanggui-kb
+
+rule_files:
+  - /etc/prometheus/alert.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # Prometheus 自身：up 指标与规则评估延迟都靠它
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # 查询服务：kb_query_* / kb_node_* / kb_retrieval_* 的主要来源
+  - job_name: query-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["query-api:8001"]
+        labels:
+          service: query-api
+
+  # 导入服务：kb_import_* 与蓝绿重建状态（kb_rebuild_status / kb_index_rows）在这里
+  # 索引注册表在 Mongo 里，两个服务都能读到，但抓取一个就够，避免同一条时间序列两份来源
+  - job_name: import-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["import-api:8000"]
+        labels:
+          service: import-api
+
+  # Milvus 自带指标（:9091/metrics）：内存、segment、查询延迟等 DB 侧信号
+  # 我们自己的埋点看不到 Milvus 内部，「内存 >80%」这类告警只能靠它
+  - job_name: milvus
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["standalone:9091"]
+        labels:
+          service: milvus
